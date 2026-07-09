@@ -129,7 +129,7 @@ def generate_story(brend, mavzu, matn=None, rasm_base64=None):
 
     if mavzu == "mahsulot_reklama" and brend == "shohona":
         return claude_generate(
-            "Shohona mahsulotlari uchun 5 ta yangi Instagram post g'oyasi va DALL-E promptlarini yoz.",
+            "Shohona mahsulotlari uchun 5 ta yangi Instagram post g'oyasi va promptlarini yoz.",
             info
         )
 
@@ -140,20 +140,48 @@ def generate_story(brend, mavzu, matn=None, rasm_base64=None):
             "source": {"type": "base64", "media_type": "image/jpeg", "data": rasm_base64}
         })
 
-    mavzu_map = {
-        "kun_hikmati": "Motivatsion kun hikmati",
-        "kun_taomi": "Kun taomi haqida story",
-        "sogliq_fakti": "Sog'liq va taom haqida qiziqarli fakt",
-        "mahsulot_reklama": "Mahsulot reklama story",
-    }
+    # Rasm berilgan — rasmdagi matnni o'qib story yaratsin
+    if rasm_base64 and not matn:
+        prompt_text = """Bu rasmdagi barcha matnni o'qi.
+Agar matn bo'lsa — aynan o'sha matnni ishlatib story yarat.
+Agar matn bo'lmasa — rasmni tavsiflab story yarat.
 
-    prompt_text = f"""Quyidagi mavzu uchun Instagram Story matni yoz:
+MUHIM: Qo'shimcha narsa yozma. Faqat quyidagi format:
+🇺🇿 O'ZBEKCHA:
+[aynan rasmdagi matn yoki tavsif]
+
+🇷🇺 RUSCHA:
+[ruscha tarjima]"""
+
+    # Foydalanuvchi matn bergan — aynan o'shani ishlatamiz
+    elif matn:
+        prompt_text = f"""Quyidagi matnni aynan o'zi bilan ishlatib Instagram Story formatlash:
+
+Matn: "{matn}"
+
+Ruscha tarjima qil va quyidagi formatda chiqar:
+🇺🇿 O'ZBEKCHA:
+{matn}
+
+🇷🇺 RUSCHA:
+[Ruscha tarjima]
+
+MUHIM: O'zbekcha qismga hech narsa qo'shma, aynan yuqoridagi matnni yoz."""
+
+    # Na rasm na matn — o'zi yaratsin
+    else:
+        mavzu_map = {
+            "kun_hikmati": "Koreyadagi o'zbeklar uchun motivatsion kun hikmati",
+            "kun_taomi": "Shohona tayyor taomlardan birini tavsiya qiluvchi story",
+            "sogliq_fakti": "Sog'liq va taom haqida qiziqarli fakt",
+            "mahsulot_reklama": "Shohona mahsulot reklama story",
+        }
+        prompt_text = f"""Quyidagi mavzu uchun Instagram Story matni yoz:
 Mavzu: {mavzu_map.get(mavzu, mavzu)}
-{f"Qo'shimcha ma'lumot: {matn}" if matn else ""}
 
 Format (AYNAN SHU FORMATDA YOZ):
 🇺🇿 O'ZBEKCHA:
-[Story matni - 3-5 ta gap, emoji bilan]
+[Story matni - 2-3 ta gap, emoji bilan]
 
 🇷🇺 RUSCHA:
 [Tarjima]"""
@@ -169,31 +197,51 @@ Format (AYNAN SHU FORMATDA YOZ):
     return resp.content[0].text
 
 # ==================== DALL-E RASM ====================
-def create_image_with_text(rasm_url, matn_uz, matn_ru, matn_en=None):
-    """Rasmga matn qo'shib 1:1 formatda 3 ta rasm yaratadi"""
+def create_image_with_text(rasm_b64, matn_uz, matn_ru, matn_en=None):
+    """Berilgan rasmdan foydalanib 1:1 formatda 3 tilda rasm yaratadi"""
     results = []
-    
+
     langs = [
-        ("O'zbekcha", matn_uz, "#1a7a3c"),
-        ("Ruscha", matn_ru, "#1a3c7a"),
+        ("O'zbekcha", matn_uz),
+        ("Ruscha", matn_ru),
     ]
     if matn_en:
-        langs.append(("English", matn_en, "#7a1a3c"))
+        langs.append(("English", matn_en))
 
-    for lang_name, matn, color in langs:
-        prompt = f"""Professional Instagram post (1:1 square format).
-Style: Modern, clean, premium food brand design.
-Background: Elegant gradient or solid color.
-Text overlay: "{matn}" — large, bold, beautiful font, {color} or white color.
-No logos. High quality. Instagram-ready."""
+    for lang_name, matn in langs:
+        # Agar rasm berilgan bo'lsa — edit API ishlatamiz
+        if rasm_b64:
+            from openai import OpenAI
+            import io
 
-        response = openai_client.images.generate(
-            model="gpt-image-2",
-            prompt=prompt,
-            size="1024x1024",
-            quality="medium",
-            n=1
-        )
+            img_data = base64.b64decode(rasm_b64)
+            img_file = io.BytesIO(img_data)
+            img_file.name = "image.jpg"
+
+            response = openai_client.images.edit(
+                model="gpt-image-2",
+                image=img_file,
+                prompt=f"""Professional Instagram post (1:1 square format).
+Keep the product photo as background.
+Add text overlay: "{matn}" — large, bold, beautiful font, white or contrasting color.
+Add semi-transparent dark overlay at bottom for text readability.
+Clean, modern design. No logos. Instagram-ready.""",
+                size="1024x1024",
+                quality="medium",
+                n=1
+            )
+        else:
+            response = openai_client.images.generate(
+                model="gpt-image-2",
+                prompt=f"""Professional Instagram post (1:1 square format).
+Modern clean food brand design. Elegant background.
+Text: "{matn}" — large, bold, beautiful font.
+Instagram-ready. No logos.""",
+                size="1024x1024",
+                quality="medium",
+                n=1
+            )
+
         img_bytes = BytesIO(base64.b64decode(response.data[0].b64_json))
         results.append({
             "bytes": img_bytes,
@@ -213,17 +261,17 @@ def create_story_image(matn_uz, matn_ru, style="hikmat"):
     }
 
     prompt = f"""{style_map.get(style, style_map['hikmat'])}
-    
-Content: Two language versions of the same text.
-Top section (Uzbek): "{matn_uz}"
-Bottom section (Russian): "{matn_ru}"
-Divider line between them.
-Square 1:1 format. Instagram-ready. No logos. Professional."""
+
+IMPORTANT: Show ONLY these exact texts, do not add any other words:
+Top section: "{matn_uz}"
+Bottom section: "{matn_ru}"
+Thin divider line between sections.
+Vertical 9:16 format (1080x1920). Instagram Story ready. No logos. No extra text."""
 
     response = openai_client.images.generate(
         model="gpt-image-2",
         prompt=prompt,
-        size="1024x1024",
+        size="1024x1792",
         quality="medium",
         n=1
     )
@@ -352,19 +400,32 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         file = await ctx.bot.get_file(photo.file_id)
         response = requests.get(file.file_path)
         img_b64 = base64.b64encode(response.content).decode()
+        caption = update.message.caption or ""
 
         if brend == "azanmarket":
             set_state(uid, rasm=img_b64, step="matn_wait_az")
-            await update.message.reply_text(
-                "📝 Matn yozasizmi? (yoki /skip yozing)",
-                parse_mode="Markdown"
-            )
-        elif brend == "shohona" and step == "rasm":
-            set_state(uid, rasm=img_b64, step="matn_wait")
-            await update.message.reply_text(
-                "📝 Matn qo'shmoqchimisiz?",
-                reply_markup=matn_keyboard()
-            )
+            if caption:
+                # Caption bilan birga kelgan — hoziroq process qil
+                await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
+                await process_azanmarket(uid, update, ctx, matn=caption)
+            else:
+                await update.message.reply_text(
+                    "📝 Matn yozasizmi? (yoki /skip yozing)",
+                    parse_mode="Markdown"
+                )
+        elif brend == "shohona":
+            set_state(uid, rasm=img_b64)
+            if caption:
+                # Caption bilan — hoziroq process qil
+                set_state(uid, step="processing")
+                await update.message.reply_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
+                await process_shohona(uid, update, ctx, matn=caption)
+            else:
+                set_state(uid, step="matn_wait")
+                await update.message.reply_text(
+                    "📝 Matn qo'shmoqchimisiz?",
+                    reply_markup=matn_keyboard()
+                )
         return
 
     # Matn yuborildi
@@ -481,10 +542,16 @@ async def process_azanmarket(uid, update, ctx, matn=None):
         if matn:
             uz_matn = matn
         else:
-            uz_matn = claude_generate(
-                "AzanMarket mahsulot uchun qisqa, jozibali Instagram post matni yoz (O'zbek tilida, 2-3 gap):",
-                AZANMARKET_INFO
+            # Rasmdagi matnni o'qi
+            resp = claude.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=500,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": rasm_b64}},
+                    {"type": "text", "text": "Bu rasmdagi mahsulot nomi va asosiy ma'lumotni qisqacha yoz (O'zbek tilida, 1-2 gap):"}
+                ]}]
             )
+            uz_matn = resp.content[0].text
 
         ru_matn = translate_to_russian(uz_matn)
         en_matn = claude_generate(
@@ -494,8 +561,8 @@ async def process_azanmarket(uid, update, ctx, matn=None):
 
         await update.message.reply_text("🖼️ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
 
-        # 3 tilda rasm yarat
-        rasms = create_image_with_text(None, uz_matn, ru_matn, en_matn)
+        # 3 tilda rasm yarat — rasmni background sifatida ishlatib
+        rasms = create_image_with_text(rasm_b64, uz_matn, ru_matn, en_matn)
 
         langs = ["🇺🇿 O'zbekcha", "🇷🇺 Ruscha", "🇬🇧 English"]
         matns = [uz_matn, ru_matn, en_matn]
