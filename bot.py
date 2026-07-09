@@ -676,6 +676,17 @@ MUHIM QOIDALAR:
             parse_mode="Markdown"
         )
 
+    # Oxirgi story saqlash va 4 ta tugma
+    full_story = f"🇺🇿 O'ZBEKCHA:\n{uz_fakt}\n\n🇷🇺 RUSCHA:\n{ru_fakt}"
+    set_state(uid, last_story=full_story, last_style="sogliq",
+              last_uz=uz_fakt, last_ru=ru_fakt)
+
+    await ctx.bot.send_message(
+        chat_id=chat_id,
+        text="Nima qilasiz?",
+        reply_markup=after_keyboard()
+    )
+
 async def process_shohona(uid, update_or_query, ctx, matn=None):
     state = get_state(uid)
     mavzu = state.get("mavzu")
