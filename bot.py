@@ -296,13 +296,21 @@ def shohona_keyboard():
         [InlineKeyboardButton("🔙 Orqaga", callback_data="start")],
     ])
 
-def matn_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Ha, matn yozaman", callback_data="matn_ha"),
-            InlineKeyboardButton("⏭️ Yo'q", callback_data="matn_yoq"),
-        ]
-    ])
+def input_keyboard(mavzu):
+    """Har mavzu uchun input knopkalari"""
+    if mavzu == "kun_taomi":
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 Rasm + direction beraman", callback_data="input_rasm")],
+            [InlineKeyboardButton("🤖 Bot yaratsin", callback_data="matn_yoq")],
+        ])
+    else:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 Rasm beraman", callback_data="input_rasm")],
+            [InlineKeyboardButton("✍️ Matn yozaman", callback_data="matn_ha")],
+            [InlineKeyboardButton("🤖 Bot yaratsin", callback_data="matn_yoq")],
+        ])
+
+
 
 # ==================== HANDLERS ====================
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -348,38 +356,55 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Shohona mavzu tanlash
     elif data.startswith("mavzu_"):
         mavzu = data.replace("mavzu_", "")
-        set_state(uid, mavzu=mavzu, step="matn")
+        set_state(uid, mavzu=mavzu, step="input")
 
         if mavzu == "hajviya":
-            # Hajviya — o'zi yaratadi
             await query.edit_message_text("😄 *Hajviya yaratilmoqda...*", parse_mode="Markdown")
             await process_shohona(uid, query, ctx)
 
         elif mavzu == "mahsulot_reklama":
-            # Promptlar beradi
             await query.edit_message_text("📦 *G'oyalar yaratilmoqda...*", parse_mode="Markdown")
             await process_shohona(uid, query, ctx)
 
         elif mavzu == "kun_taomi":
-            # Rasm kerak
-            set_state(uid, step="rasm")
             await query.edit_message_text(
-                "🍲 *Kun taomi* — Taom rasmini yuboring 📸",
+                "🍲 *Kun taomi*\n\nQanday input berasiz?",
+                reply_markup=input_keyboard("kun_taomi"),
+                parse_mode="Markdown"
+            )
+
+        elif mavzu == "kun_hikmati":
+            await query.edit_message_text(
+                "💡 *Kun hikmati*\n\nQanday input berasiz?",
+                reply_markup=input_keyboard("kun_hikmati"),
+                parse_mode="Markdown"
+            )
+
+        elif mavzu == "sogliq_fakti":
+            await query.edit_message_text(
+                "🌿 *Sog'liq va taom faktlari*\n\nQanday input berasiz?",
+                reply_markup=input_keyboard("sogliq_fakti"),
                 parse_mode="Markdown"
             )
 
         else:
-            # Matn kerak yoki yo'q
             await query.edit_message_text(
-                f"Matn qo'shmoqchimisiz?",
-                reply_markup=matn_keyboard(),
+                "Qanday input berasiz?",
+                reply_markup=input_keyboard(mavzu),
                 parse_mode="Markdown"
             )
+
+    elif data == "input_rasm":
+        set_state(uid, step="rasm")
+        await query.edit_message_text(
+            "📸 *Rasm yuboring:*",
+            parse_mode="Markdown"
+        )
 
     elif data == "matn_ha":
         set_state(uid, step="matn_wait")
         await query.edit_message_text(
-            "✍️ Matnni yuboring:",
+            "✍️ *Matnni yuboring:*",
             parse_mode="Markdown"
         )
 
