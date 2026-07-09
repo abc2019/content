@@ -512,6 +512,9 @@ MUHIM QOIDALAR:
     if hasattr(update_or_query, 'edit_message_text'):
         await update_or_query.edit_message_text("⏳ *Fakt yaratilmoqda...*", parse_mode="Markdown")
 
+    sogliq_title = mavzu or "Sog'liq fakti"
+    sogliq_ru_title = mavzu or "Факт о здоровье"
+
     if len(uz_fakt) <= QISQA_CHEGARA:
         # Qisqa — 1 ta rasm, ikki tilda
         image_bytes = create_story_image(uz_fakt, ru_fakt, "sogliq")
@@ -519,27 +522,25 @@ MUHIM QOIDALAR:
         await ctx.bot.send_photo(
             chat_id=chat_id,
             photo=image_bytes,
-            caption=f"🌿 *{mavzu or 'Sog\\'liq fakti'}*\n\n🇺🇿 {uz_fakt}\n\n🇷🇺 {ru_fakt}"[:1024],
+            caption=f"🌿 *{sogliq_title}*\n\n🇺🇿 {uz_fakt}\n\n🇷🇺 {ru_fakt}"[:1024],
             parse_mode="Markdown"
         )
     else:
         # Uzun — 2 ta alohida rasm
-        # O'zbekcha rasm
         uz_bytes = create_story_image(uz_fakt, "", "sogliq")
         uz_bytes.seek(0)
         await ctx.bot.send_photo(
             chat_id=chat_id,
             photo=uz_bytes,
-            caption=f"🇺🇿 *{mavzu or 'Sog\\'liq fakti'}*\n\n{uz_fakt}"[:1024],
+            caption=f"🇺🇿 *{sogliq_title}*\n\n{uz_fakt}"[:1024],
             parse_mode="Markdown"
         )
-        # Ruscha rasm
         ru_bytes = create_story_image(ru_fakt, "", "sogliq")
         ru_bytes.seek(0)
         await ctx.bot.send_photo(
             chat_id=chat_id,
             photo=ru_bytes,
-            caption=f"🇷🇺 *{mavzu or 'Факт о здоровье'}*\n\n{ru_fakt}"[:1024],
+            caption=f"🇷🇺 *{sogliq_ru_title}*\n\n{ru_fakt}"[:1024],
             parse_mode="Markdown"
         )
 
