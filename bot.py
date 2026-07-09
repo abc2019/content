@@ -184,9 +184,7 @@ def create_image_with_text(rasm_url, matn_uz, matn_ru, matn_en=None):
         prompt = f"""Professional Instagram post (1:1 square format).
 Style: Modern, clean, premium food brand design.
 Background: Elegant gradient or solid color.
-Main image: The provided product photo centered.
 Text overlay: "{matn}" — large, bold, beautiful font, {color} or white color.
-Brand name subtle at bottom.
 No logos. High quality. Instagram-ready."""
 
         response = openai_client.images.generate(
@@ -194,12 +192,12 @@ No logos. High quality. Instagram-ready."""
             prompt=prompt,
             size="1024x1024",
             quality="medium",
-            n=1
+            n=1,
+            response_format="b64_json"
         )
-        # URL dan rasm yuklab olish
-        img_response = requests.get(response.data[0].url)
+        img_bytes = BytesIO(base64.b64decode(response.data[0].b64_json))
         results.append({
-            "bytes": BytesIO(img_response.content),
+            "bytes": img_bytes,
             "lang": lang_name
         })
 
@@ -228,11 +226,10 @@ Square 1:1 format. Instagram-ready. No logos. Professional."""
         prompt=prompt,
         size="1024x1024",
         quality="medium",
-        n=1
+        n=1,
+        response_format="b64_json"
     )
-    # URL dan rasm yuklab olish
-    img_response = requests.get(response.data[0].url)
-    return BytesIO(img_response.content)
+    return BytesIO(base64.b64decode(response.data[0].b64_json))
 
 # ==================== KEYBOARD ====================
 def main_keyboard():
