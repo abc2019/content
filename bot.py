@@ -20,8 +20,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY", "")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
 CHAT_ID = int(os.environ.get("CHAT_ID", "1002821803"))
-TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tashkent")  # UZT default
-SEND_HOUR = int(os.environ.get("SEND_HOUR", "9"))
+TIMEZONE = "Asia/Tashkent"
+SEND_HOUR = 9
 
 claude = anthropic.Anthropic(api_key=CLAUDE_KEY)
 openai_client = OpenAI(api_key=OPENAI_KEY)
@@ -193,7 +193,7 @@ No logos. High quality. Instagram-ready."""
             model="gpt-image-2",
             prompt=prompt,
             size="1024x1024",
-            quality="standard",
+            quality="medium",
             n=1
         )
         results.append({
@@ -225,7 +225,7 @@ Square 1:1 format. Instagram-ready. No logos. Professional."""
         model="gpt-image-2",
         prompt=prompt,
         size="1024x1024",
-        quality="standard",
+        quality="medium",
         n=1
     )
     return response.data[0].url
