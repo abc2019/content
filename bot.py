@@ -381,9 +381,10 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             )
 
         elif mavzu == "sogliq_fakti":
+            # Sog'liq fakti — mavzu nomini so'rash kerak
+            set_state(uid, step="sogliq_mavzu")
             await query.edit_message_text(
-                "🌿 *Sog'liq va taom faktlari*\n\nQanday input berasiz?",
-                reply_markup=input_keyboard("sogliq_fakti"),
+                "🌿 *Sog'liq va taom faktlari*\n\nQaysi mavzu haqida fakt kerak?\n\nMisol: *Palov*, *Nuxat*, *Zira*, *Sarimsoq*, *Guruch*...",
                 parse_mode="Markdown"
             )
 
@@ -441,15 +442,17 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         elif brend == "shohona":
             set_state(uid, rasm=img_b64)
             if caption:
-                # Caption bilan — hoziroq process qil
                 set_state(uid, step="processing")
                 await update.message.reply_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
                 await process_shohona(uid, update, ctx, matn=caption)
             else:
                 set_state(uid, step="matn_wait")
                 await update.message.reply_text(
-                    "📝 Matn qo'shmoqchimisiz?",
-                    reply_markup=matn_keyboard()
+                    "📝 Rasm qabul qilindi! Matn/direction yozasizmi?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✍️ Ha, yozaman", callback_data="matn_ha")],
+                        [InlineKeyboardButton("🤖 Bot o'zi yaratsin", callback_data="matn_yoq")],
+                    ])
                 )
         return
 
@@ -465,6 +468,12 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
         await process_azanmarket(uid, update, ctx, matn=text)
 
+    elif step == "sogliq_mavzu":
+        # Sog'liq fakti mavzusi keldi
+        set_state(uid, step="processing")
+        await update.message.reply_text("⏳ *Fakt yaratilmoqda...*", parse_mode="Markdown")
+        await process_sogliq_fakti(uid, update, ctx, mavzu=text)
+
     elif step == "matn_wait":
         set_state(uid, step="processing")
         await update.message.reply_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
@@ -476,12 +485,75 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=main_keyboard()
         )
 
+async def process_sogliq_fakti(uid, update_or_query, ctx, mavzu=None):
+    """Sog'liq fakti — qisqa bo'lsa 1 rasm, uzun bo'lsa 2 ta alohida rasm"""
+    if hasattr(update_or_query, 'message') and update_or_query.message:
+        chat_id = update_or_query.message.chat_id
+    else:
+        chat_id = CHAT_ID
+
+    # Fakt yaratish
+    prompt = f"""Quyidagi mavzu haqida qisqa va qiziqarli Instagram Story fakti yoz:
+Mavzu: {mavzu or "o'zbek taomlari"}
+
+MUHIM QOIDALAR:
+- Faqat 2-3 ta qisqa gap yoz
+- Emoji ishlat
+- Ilmiy, qiziqarli, foydali bo'lsin
+- Faqat O'zbekcha yoz (tarjima shart emas)
+- JUDA QISQA bo'lsin — maksimum 120 belgi"""
+
+    uz_fakt = claude_generate(prompt, SHOHONA_INFO)
+    ru_fakt = translate_to_russian(uz_fakt)
+
+    # Uzunlikni tekshir
+    QISQA_CHEGARA = 120
+
+    if hasattr(update_or_query, 'edit_message_text'):
+        await update_or_query.edit_message_text("⏳ *Fakt yaratilmoqda...*", parse_mode="Markdown")
+
+    if len(uz_fakt) <= QISQA_CHEGARA:
+        # Qisqa — 1 ta rasm, ikki tilda
+        image_bytes = create_story_image(uz_fakt, ru_fakt, "sogliq")
+        image_bytes.seek(0)
+        await ctx.bot.send_photo(
+            chat_id=chat_id,
+            photo=image_bytes,
+            caption=f"🌿 *{mavzu or 'Sog\\'liq fakti'}*\n\n🇺🇿 {uz_fakt}\n\n🇷🇺 {ru_fakt}"[:1024],
+            parse_mode="Markdown"
+        )
+    else:
+        # Uzun — 2 ta alohida rasm
+        # O'zbekcha rasm
+        uz_bytes = create_story_image(uz_fakt, "", "sogliq")
+        uz_bytes.seek(0)
+        await ctx.bot.send_photo(
+            chat_id=chat_id,
+            photo=uz_bytes,
+            caption=f"🇺🇿 *{mavzu or 'Sog\\'liq fakti'}*\n\n{uz_fakt}"[:1024],
+            parse_mode="Markdown"
+        )
+        # Ruscha rasm
+        ru_bytes = create_story_image(ru_fakt, "", "sogliq")
+        ru_bytes.seek(0)
+        await ctx.bot.send_photo(
+            chat_id=chat_id,
+            photo=ru_bytes,
+            caption=f"🇷🇺 *{mavzu or 'Факт о здоровье'}*\n\n{ru_fakt}"[:1024],
+            parse_mode="Markdown"
+        )
+
 async def process_shohona(uid, update_or_query, ctx, matn=None):
     state = get_state(uid)
     mavzu = state.get("mavzu")
     rasm_b64 = state.get("rasm")
 
     try:
+        # Sog'liq fakti — maxsus jarayon
+        if mavzu == "sogliq_fakti":
+            await process_sogliq_fakti(uid, update_or_query, ctx, mavzu=matn)
+            return
+
         # Story matni yarat
         story_text = generate_story("shohona", mavzu, matn, rasm_b64)
 
@@ -505,38 +577,35 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
         style = style_map.get(mavzu, "hikmat")
 
         if mavzu == "mahsulot_reklama":
-            # Faqat matn yuboradi
             msg = f"📦 *Shohona — Mahsulot reklama g'oyalari:*\n\n{story_text}"
             if hasattr(update_or_query, 'edit_message_text'):
                 await update_or_query.edit_message_text(msg, parse_mode="Markdown")
             else:
                 await update_or_query.message.reply_text(msg, parse_mode="Markdown")
         else:
-            # Rasm yarat
             if uz_text and ru_text:
-                image_url = create_story_image(uz_text, ru_text, style)
+                image_bytes = create_story_image(uz_text, ru_text, style)
             else:
-                image_url = create_story_image(
-                    story_text[:200], 
-                    translate_to_russian(story_text[:200]), 
+                image_bytes = create_story_image(
+                    story_text[:200],
+                    translate_to_russian(story_text[:200]),
                     style
                 )
 
-            # Yuborish
             caption = f"✅ *Shohona Story*\n\n{story_text}"
-            
+
             if hasattr(update_or_query, 'message') and update_or_query.message:
                 chat_id = update_or_query.message.chat_id
             else:
                 chat_id = CHAT_ID
 
+            image_bytes.seek(0)
             await ctx.bot.send_photo(
                 chat_id=chat_id,
-                photo=image_url,
+                photo=image_bytes,
                 caption=caption[:1024],
                 parse_mode="Markdown"
             )
-            image_url.seek(0)
 
         # State reset
         set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
