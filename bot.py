@@ -192,8 +192,7 @@ No logos. High quality. Instagram-ready."""
             prompt=prompt,
             size="1024x1024",
             quality="medium",
-            n=1,
-            response_format="b64_json"
+            n=1
         )
         img_bytes = BytesIO(base64.b64decode(response.data[0].b64_json))
         results.append({
@@ -226,8 +225,7 @@ Square 1:1 format. Instagram-ready. No logos. Professional."""
         prompt=prompt,
         size="1024x1024",
         quality="medium",
-        n=1,
-        response_format="b64_json"
+        n=1
     )
     return BytesIO(base64.b64decode(response.data[0].b64_json))
 
