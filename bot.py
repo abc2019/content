@@ -296,6 +296,15 @@ def shohona_keyboard():
         [InlineKeyboardButton("🔙 Orqaga", callback_data="start")],
     ])
 
+def after_keyboard():
+    """Yaratilgandan keyin chiqadigan 4 ta tugma"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Matnni tuzat", callback_data="tuzatish_matn")],
+        [InlineKeyboardButton("🎨 Stil tuzat", callback_data="tuzatish_stil")],
+        [InlineKeyboardButton("🔄 Boshqacha qil", callback_data="qayta_yaratish")],
+        [InlineKeyboardButton("✅ Qabul", callback_data="start")],
+    ])
+
 def input_keyboard(mavzu):
     """Har mavzu uchun input knopkalari"""
     if mavzu == "kun_taomi":
@@ -402,12 +411,49 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-    elif data == "tuzatish":
-        set_state(uid, step="tuzatish_wait")
+    elif data == "tuzatish_matn":
+        set_state(uid, step="tuzatish_wait", tuzatish_tur="matn")
         await query.edit_message_text(
-            "✏️ *Tuzatishni yozing:*\n\nMisol:\n— 'Ruscha qismini qayta yoz'\n— 'Qisqaroq qil'\n— 'Ko'proq emoji qo'sh'\n— 'To'liq boshqacha qil'",
+            "✏️ *Matnni qanday tuzatish kerak?*\n\nMisol:\n— Ruscha qismini qayta yoz\n— Qisqaroq qil\n— Birinchi gapni o'zgartir",
             parse_mode="Markdown"
         )
+
+    elif data == "tuzatish_stil":
+        set_state(uid, step="tuzatish_wait", tuzatish_tur="stil")
+        await query.edit_message_text(
+            "🎨 *Stilni qanday tuzatish kerak?*\n\nMisol:\n— Ko'proq emoji qo'sh\n— Rasmiyroq qil\n— Qiziqarliroq qil\n— Hazilroq ohang ber",
+            parse_mode="Markdown"
+        )
+
+    elif data == "tuzatish":
+        set_state(uid, step="tuzatish_wait", tuzatish_tur="matn")
+        await query.edit_message_text(
+            "✏️ *Tuzatishni yozing:*",
+            parse_mode="Markdown"
+        )
+
+    elif data == "qayta_yaratish":
+        state = get_state(uid)
+        mavzu = state.get("mavzu")
+        if mavzu:
+            set_state(uid, step="processing", rasm=None)
+            await query.edit_message_text("🔄 *Boshqacha yaratilmoqda...*", parse_mode="Markdown")
+            await process_shohona(uid, query, ctx)
+        else:
+            await query.edit_message_text(
+                "🤖 *Yangi kontent yaratamizmi?*",
+                reply_markup=main_keyboard(),
+                parse_mode="Markdown"
+            )
+
+    elif data == "nusxa":
+        state = get_state(uid)
+        last_story = state.get("last_story", "")
+        if last_story:
+            await query.answer("📋 Matn nusxalandi!", show_alert=False)
+            await query.message.reply_text(f"📋 *Nusxa:*\n\n{last_story}", parse_mode="Markdown")
+        else:
+            await query.answer("Matn topilmadi!", show_alert=True)
 
     elif data == "matn_ha":
         set_state(uid, step="matn_wait")
@@ -503,35 +549,49 @@ async def process_tuzatish(uid, update, ctx, koʻrsatma=None):
     state = get_state(uid)
     last_story = state.get("last_story", "")
     last_style = state.get("last_style", "hikmat")
-    mavzu = state.get("mavzu", "kun_hikmati")
+    tuzatish_tur = state.get("tuzatish_tur", "matn")
 
     try:
-        # Tuzatilgan matn yarat
-        prompt = f"""Quyidagi Instagram Story matnini tuzat:
+        if tuzatish_tur == "stil":
+            prompt = f"""Quyidagi Instagram Story matnining STILINI tuzat (matnni o'zgartirma, faqat uslubini):
 
 MAVJUD MATN:
 {last_story}
 
-TUZATISH KO'RSATMASI:
+STIL KO'RSATMASI:
 {koʻrsatma}
 
-MUHIM: Faqat quyidagi formatda chiqar:
+MUHIM: Matn ma'nosini o'zgartirma. Faqat uslub, emoji, ton ni o'zgartir.
+Format:
 🇺🇿 O'ZBEKCHA:
-[tuzatilgan o'zbek matni]
+[tuzatilgan]
 
 🇷🇺 RUSCHA:
-[tuzatilgan rus matni]"""
+[tuzatilgan]"""
+        else:
+            prompt = f"""Quyidagi Instagram Story MATNINI tuzat:
+
+MAVJUD MATN:
+{last_story}
+
+TUZATISH:
+{koʻrsatma}
+
+Format:
+🇺🇿 O'ZBEKCHA:
+[tuzatilgan]
+
+🇷🇺 RUSCHA:
+[tuzatilgan]"""
 
         new_story = claude_generate(prompt, SHOHONA_INFO)
 
-        # Yangi matnni ajrat
         uz_text = ru_text = ""
         if "🇺🇿" in new_story and "🇷🇺" in new_story:
             parts = new_story.split("🇷🇺")
             uz_text = parts[0].replace("🇺🇿", "").replace("O'ZBEKCHA:", "").strip()
             ru_text = parts[1].replace("RUSCHA:", "").strip() if len(parts) > 1 else ""
 
-        # Yangi rasm yarat
         image_bytes = create_story_image(
             uz_text or new_story[:200],
             ru_text or translate_to_russian(new_story[:200]),
@@ -542,20 +602,15 @@ MUHIM: Faqat quyidagi formatda chiqar:
         await ctx.bot.send_photo(
             chat_id=update.message.chat_id,
             photo=image_bytes,
-            caption=f"✅ *Tuzatilgan Story*\n\n{new_story}"[:1024],
+            caption=f"✅ *Tuzatilgan*\n\n{new_story}"[:1024],
             parse_mode="Markdown"
         )
 
-        # Oxirgi story yangilash
         set_state(uid, last_story=new_story, last_uz=uz_text, last_ru=ru_text)
 
-        # Yana tuzatish yoki tayyor
         await update.message.reply_text(
-            "Yana tuzatish kerakmi?",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Yana tuzatish", callback_data="tuzatish")],
-                [InlineKeyboardButton("✅ Tayyor, yangi kontent", callback_data="start")],
-            ])
+            "Nima qilasiz?",
+            reply_markup=after_keyboard()
         )
 
     except Exception as e:
@@ -689,14 +744,11 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
             set_state(uid, last_story=story_text, last_style=style,
                       last_uz=uz_text, last_ru=ru_text)
 
-            # Tuzatish tugmasi
+            # 4 ta tugma
             await ctx.bot.send_message(
                 chat_id=chat_id,
-                text="Tuzatish kerakmi?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✏️ Tuzatish", callback_data="tuzatish")],
-                    [InlineKeyboardButton("✅ Tayyor, yangi kontent", callback_data="start")],
-                ])
+                text="Nima qilasiz?",
+                reply_markup=after_keyboard()
             )
             return
 
@@ -705,8 +757,8 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
 
         if hasattr(update_or_query, 'message') and update_or_query.message:
             await update_or_query.message.reply_text(
-                "✅ Tayyor! Yana kontent yaratamizmi?",
-                reply_markup=main_keyboard()
+                "Nima qilasiz?",
+                reply_markup=after_keyboard()
             )
 
     except Exception as e:
@@ -761,10 +813,10 @@ async def process_azanmarket(uid, update, ctx, matn=None):
                 caption=f"{langs[i]}\n\n{matns[i]}"
             )
 
-        set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+        set_state(uid, last_story=f"{uz_matn}\n\n{ru_matn}\n\n{en_matn}")
         await update.message.reply_text(
-            "✅ 3 ta rasm tayyor! Yana kontent yaratamizmi?",
-            reply_markup=main_keyboard()
+            "Nima qilasiz?",
+            reply_markup=after_keyboard()
         )
 
     except Exception as e:
