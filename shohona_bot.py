@@ -1,0 +1,651 @@
+import os
+import json
+import asyncio
+import logging
+from datetime import datetime, time
+import pytz
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+import anthropic
+from openai import OpenAI
+import requests
+from io import BytesIO
+import base64
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# ==================== SOZLAMALAR ====================
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY", "")
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+CHAT_ID = int(os.environ.get("CHAT_ID", "1002821803"))
+TIMEZONE = os.environ.get("TIMEZONE", "Asia/Tashkent")  # UZT default
+SEND_HOUR = int(os.environ.get("SEND_HOUR", "9"))
+
+claude = anthropic.Anthropic(api_key=CLAUDE_KEY)
+openai_client = OpenAI(api_key=OPENAI_KEY)
+
+# ==================== SHOHONA BREND ====================
+SHOHONA_INFO = """
+Sen SHOHONA brendining professional SMM mutaxassisisan.
+Brend: SHOHONA — "Halal and Excellent"
+Instagram: @shohona_taom | Tel: 010-5586-1916 | bit.ly/4qAoFui
+Joylashuv: Koreya, Hwaseong-si
+Auditoriya: Koreyadagi o'zbeklar, ruslar, markaziy osiyoliklar
+Mahsulotlar: Palov ₩5,650 | Lag'mon ₩6,950 | Qozon Kabob ₩8,250 | Mastava ₩4,000 | Sho'rva ₩4,000 | va boshqalar
+Xususiyatlar: 100% Halol, Konservantsiz, 3 daqiqada tayyor, Made in Korea
+"""
+
+AZANMARKET_INFO = """
+Sen AzanMarket brendining professional SMM mutaxassisisan.
+Brend: AzanMarket — Halol oziq-ovqat onlayn do'koni
+Website: azanmarket.com | Tel: 010-5586-1916
+Joylashuv: Koreya
+Auditoriya: Koreyadagi o'zbeklar, ruslar, markaziy osiyoliklar
+Xususiyatlar: 100% Halol mahsulotlar, Koreya bo'ylab yetkazib berish, BEPUL yetkazish
+"""
+
+# ==================== 30 KUNLIK KALENDAR ====================
+CALENDAR = [
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+    {"mavzu": "Kun hikmati", "tavsif": "Motivatsion hikmat"},
+    {"mavzu": "Kun taomi", "tavsif": "Shohona mahsulot tavsiyasi"},
+    {"mavzu": "Hajviya", "tavsif": "Kulgili kontent"},
+    {"mavzu": "Sog'liq fakti", "tavsif": "Sog'liq va taom haqida fakt"},
+    {"mavzu": "Mahsulot reklama", "tavsif": "Shohona mahsulot"},
+]
+
+# ==================== USER STATE ====================
+user_states = {}
+
+def get_state(user_id):
+    if user_id not in user_states:
+        user_states[user_id] = {"brend": None, "mavzu": None, "rasm": None, "step": "start"}
+    return user_states[user_id]
+
+def set_state(user_id, **kwargs):
+    state = get_state(user_id)
+    state.update(kwargs)
+
+# ==================== CLAUDE FUNKSIYALAR ====================
+def claude_generate(prompt, system):
+    resp = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=2000,
+        system=system,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return resp.content[0].text
+
+def translate_to_russian(text):
+    return claude_generate(
+        f"Quyidagi O'zbek matnni Ruscha tarjima qil. Faqat tarjimani ber, boshqa hech narsa yozma:\n\n{text}",
+        "Sen professional tarjimon san. Faqat tarjima ber."
+    )
+
+def generate_hajviya():
+    return claude_generate(
+        """Shohona brendiga aloqador kulgili, hazil-mazax story matni yoz.
+        Mavzular: Koreyadagi o'zbek hayoti, ona yurt sog'inch, tez-tez Shohona yeyish.
+        Format:
+        🇺🇿 O'ZBEKCHA:
+        [Story matni]
+        
+        🇷🇺 RUSCHA:
+        [Tarjima]""",
+        SHOHONA_INFO
+    )
+
+def generate_story(brend, mavzu, matn=None, rasm_base64=None):
+    info = SHOHONA_INFO if brend == "shohona" else AZANMARKET_INFO
+
+    if mavzu == "hajviya":
+        return generate_hajviya()
+
+    if mavzu == "mahsulot_reklama" and brend == "shohona":
+        return claude_generate(
+            "Shohona mahsulotlari uchun 5 ta yangi Instagram post g'oyasi va DALL-E promptlarini yoz.",
+            info
+        )
+
+    content = []
+    if rasm_base64:
+        content.append({
+            "type": "image",
+            "source": {"type": "base64", "media_type": "image/jpeg", "data": rasm_base64}
+        })
+
+    mavzu_map = {
+        "kun_hikmati": "Motivatsion kun hikmati",
+        "kun_taomi": "Kun taomi haqida story",
+        "sogliq_fakti": "Sog'liq va taom haqida qiziqarli fakt",
+        "mahsulot_reklama": "Mahsulot reklama story",
+    }
+
+    prompt_text = f"""Quyidagi mavzu uchun Instagram Story matni yoz:
+Mavzu: {mavzu_map.get(mavzu, mavzu)}
+{f"Qo'shimcha ma'lumot: {matn}" if matn else ""}
+
+Format (AYNAN SHU FORMATDA YOZ):
+🇺🇿 O'ZBEKCHA:
+[Story matni - 3-5 ta gap, emoji bilan]
+
+🇷🇺 RUSCHA:
+[Tarjima]"""
+
+    content.append({"type": "text", "text": prompt_text})
+    
+    resp = claude.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1000,
+        system=info,
+        messages=[{"role": "user", "content": content}]
+    )
+    return resp.content[0].text
+
+# ==================== DALL-E RASM ====================
+def create_image_with_text(rasm_url, matn_uz, matn_ru, matn_en=None):
+    """Rasmga matn qo'shib 1:1 formatda 3 ta rasm yaratadi"""
+    results = []
+    
+    langs = [
+        ("O'zbekcha", matn_uz, "#1a7a3c"),
+        ("Ruscha", matn_ru, "#1a3c7a"),
+    ]
+    if matn_en:
+        langs.append(("English", matn_en, "#7a1a3c"))
+
+    for lang_name, matn, color in langs:
+        prompt = f"""Professional Instagram post (1:1 square format).
+Style: Modern, clean, premium food brand design.
+Background: Elegant gradient or solid color.
+Main image: The provided product photo centered.
+Text overlay: "{matn}" — large, bold, beautiful font, {color} or white color.
+Brand name subtle at bottom.
+No logos. High quality. Instagram-ready."""
+
+        response = openai_client.images.generate(
+            model="dall-e-3",
+            prompt=prompt,
+            size="1024x1024",
+            quality="standard",
+            n=1
+        )
+        results.append({
+            "url": response.data[0].url,
+            "lang": lang_name
+        })
+
+    return results
+
+def create_story_image(matn_uz, matn_ru, style="hikmat"):
+    """Story uchun rasm yaratadi (2 tilda, bir xil style)"""
+    
+    style_map = {
+        "hikmat": "Elegant motivational quote card. Dark green or deep navy background. Beautiful serif font. Gold accents. Minimalist design.",
+        "sogliq": "Clean health infographic style. White or light background. Fresh green colors. Modern sans-serif font.",
+        "hajviya": "Funny meme style. Bright warm colors. Bold comic-style font. Playful design.",
+        "taom": "Food photography style. Warm golden light. Appetizing. Professional food blog aesthetic.",
+    }
+
+    prompt = f"""{style_map.get(style, style_map['hikmat'])}
+    
+Content: Two language versions of the same text.
+Top section (Uzbek): "{matn_uz}"
+Bottom section (Russian): "{matn_ru}"
+Divider line between them.
+Square 1:1 format. Instagram-ready. No logos. Professional."""
+
+    response = openai_client.images.generate(
+        model="dall-e-3",
+        prompt=prompt,
+        size="1024x1024",
+        quality="standard",
+        n=1
+    )
+    return response.data[0].url
+
+# ==================== KEYBOARD ====================
+def main_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🥫 Shohona", callback_data="brend_shohona"),
+            InlineKeyboardButton("🛒 AzanMarket", callback_data="brend_azanmarket"),
+        ]
+    ])
+
+def shohona_keyboard():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💡 Kun hikmati", callback_data="mavzu_kun_hikmati")],
+        [InlineKeyboardButton("🍲 Kun taomi", callback_data="mavzu_kun_taomi")],
+        [InlineKeyboardButton("🌿 Sog'liq va taom faktlari", callback_data="mavzu_sogliq_fakti")],
+        [InlineKeyboardButton("😄 Hajviya", callback_data="mavzu_hajviya")],
+        [InlineKeyboardButton("📦 Mahsulot reklama", callback_data="mavzu_mahsulot_reklama")],
+        [InlineKeyboardButton("🔙 Orqaga", callback_data="start")],
+    ])
+
+def matn_keyboard():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Ha, matn yozaman", callback_data="matn_ha"),
+            InlineKeyboardButton("⏭️ Yo'q", callback_data="matn_yoq"),
+        ]
+    ])
+
+# ==================== HANDLERS ====================
+async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+    await update.message.reply_text(
+        "🤖 *Salom! Qaysi brend uchun kontent yaratamiz?*",
+        reply_markup=main_keyboard(),
+        parse_mode="Markdown"
+    )
+
+async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    uid = query.from_user.id
+    data = query.data
+    state = get_state(uid)
+
+    # Brend tanlash
+    if data == "brend_shohona":
+        set_state(uid, brend="shohona", step="mavzu")
+        await query.edit_message_text(
+            "🥫 *Shohona* — Mavzuni tanlang:",
+            reply_markup=shohona_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    elif data == "brend_azanmarket":
+        set_state(uid, brend="azanmarket", step="rasm")
+        await query.edit_message_text(
+            "🛒 *AzanMarket* — Mahsulot rasmini yuboring 📸",
+            parse_mode="Markdown"
+        )
+
+    elif data == "start":
+        set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+        await query.edit_message_text(
+            "🤖 *Qaysi brend uchun kontent yaratamiz?*",
+            reply_markup=main_keyboard(),
+            parse_mode="Markdown"
+        )
+
+    # Shohona mavzu tanlash
+    elif data.startswith("mavzu_"):
+        mavzu = data.replace("mavzu_", "")
+        set_state(uid, mavzu=mavzu, step="matn")
+
+        if mavzu == "hajviya":
+            # Hajviya — o'zi yaratadi
+            await query.edit_message_text("😄 *Hajviya yaratilmoqda...*", parse_mode="Markdown")
+            await process_shohona(uid, query, ctx)
+
+        elif mavzu == "mahsulot_reklama":
+            # Promptlar beradi
+            await query.edit_message_text("📦 *G'oyalar yaratilmoqda...*", parse_mode="Markdown")
+            await process_shohona(uid, query, ctx)
+
+        elif mavzu == "kun_taomi":
+            # Rasm kerak
+            set_state(uid, step="rasm")
+            await query.edit_message_text(
+                "🍲 *Kun taomi* — Taom rasmini yuboring 📸",
+                parse_mode="Markdown"
+            )
+
+        else:
+            # Matn kerak yoki yo'q
+            await query.edit_message_text(
+                f"Matn qo'shmoqchimisiz?",
+                reply_markup=matn_keyboard(),
+                parse_mode="Markdown"
+            )
+
+    elif data == "matn_ha":
+        set_state(uid, step="matn_wait")
+        await query.edit_message_text(
+            "✍️ Matnni yuboring:",
+            parse_mode="Markdown"
+        )
+
+    elif data == "matn_yoq":
+        set_state(uid, step="processing")
+        await query.edit_message_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
+        await process_shohona(uid, query, ctx)
+
+async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    state = get_state(uid)
+    step = state.get("step")
+    brend = state.get("brend")
+
+    # Rasm yuborildi
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        file = await ctx.bot.get_file(photo.file_id)
+        response = requests.get(file.file_path)
+        img_b64 = base64.b64encode(response.content).decode()
+
+        if brend == "azanmarket":
+            set_state(uid, rasm=img_b64, step="matn_wait_az")
+            await update.message.reply_text(
+                "📝 Matn yozasizmi? (yoki /skip yozing)",
+                parse_mode="Markdown"
+            )
+        elif brend == "shohona" and step == "rasm":
+            set_state(uid, rasm=img_b64, step="matn_wait")
+            await update.message.reply_text(
+                "📝 Matn qo'shmoqchimisiz?",
+                reply_markup=matn_keyboard()
+            )
+        return
+
+    # Matn yuborildi
+    text = update.message.text
+
+    if text == "/skip" and brend == "azanmarket":
+        await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
+        await process_azanmarket(uid, update, ctx, matn=None)
+        return
+
+    if step == "matn_wait_az":
+        await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
+        await process_azanmarket(uid, update, ctx, matn=text)
+
+    elif step == "matn_wait":
+        set_state(uid, step="processing")
+        await update.message.reply_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
+        await process_shohona(uid, update, ctx, matn=text)
+
+    elif step == "start":
+        await update.message.reply_text(
+            "🤖 Qaysi brend?",
+            reply_markup=main_keyboard()
+        )
+
+async def process_shohona(uid, update_or_query, ctx, matn=None):
+    state = get_state(uid)
+    mavzu = state.get("mavzu")
+    rasm_b64 = state.get("rasm")
+
+    try:
+        # Story matni yarat
+        story_text = generate_story("shohona", mavzu, matn, rasm_b64)
+
+        # O'zbek va Rus qismlarini ajrat
+        uz_text = ""
+        ru_text = ""
+        
+        if "🇺🇿" in story_text and "🇷🇺" in story_text:
+            parts = story_text.split("🇷🇺")
+            uz_text = parts[0].replace("🇺🇿", "").replace("O'ZBEKCHA:", "").strip()
+            ru_text = parts[1].replace("RUSCHA:", "").strip() if len(parts) > 1 else ""
+
+        # Mavzu bo'yicha style
+        style_map = {
+            "kun_hikmati": "hikmat",
+            "sogliq_fakti": "sogliq",
+            "hajviya": "hajviya",
+            "kun_taomi": "taom",
+            "mahsulot_reklama": "taom",
+        }
+        style = style_map.get(mavzu, "hikmat")
+
+        if mavzu == "mahsulot_reklama":
+            # Faqat matn yuboradi
+            msg = f"📦 *Shohona — Mahsulot reklama g'oyalari:*\n\n{story_text}"
+            if hasattr(update_or_query, 'edit_message_text'):
+                await update_or_query.edit_message_text(msg, parse_mode="Markdown")
+            else:
+                await update_or_query.message.reply_text(msg, parse_mode="Markdown")
+        else:
+            # Rasm yarat
+            if uz_text and ru_text:
+                image_url = create_story_image(uz_text, ru_text, style)
+            else:
+                image_url = create_story_image(
+                    story_text[:200], 
+                    translate_to_russian(story_text[:200]), 
+                    style
+                )
+
+            # Yuborish
+            caption = f"✅ *Shohona Story*\n\n{story_text}"
+            
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                chat_id = update_or_query.message.chat_id
+            else:
+                chat_id = CHAT_ID
+
+            await ctx.bot.send_photo(
+                chat_id=chat_id,
+                photo=image_url,
+                caption=caption[:1024],
+                parse_mode="Markdown"
+            )
+
+        # State reset
+        set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+        
+        # Yangi kontent uchun
+        if hasattr(update_or_query, 'message') and update_or_query.message:
+            await update_or_query.message.reply_text(
+                "✅ Tayyor! Yana kontent yaratamizmi?",
+                reply_markup=main_keyboard()
+            )
+
+    except Exception as e:
+        logger.error(f"Shohona error: {e}")
+        err_msg = f"❌ Xatolik: {str(e)}"
+        if hasattr(update_or_query, 'message') and update_or_query.message:
+            await update_or_query.message.reply_text(err_msg)
+
+async def process_azanmarket(uid, update, ctx, matn=None):
+    state = get_state(uid)
+    rasm_b64 = state.get("rasm")
+
+    try:
+        if not rasm_b64:
+            await update.message.reply_text("❌ Rasm topilmadi. Qaytadan yuboring.")
+            return
+
+        # 3 tilda matn yarat
+        if matn:
+            uz_matn = matn
+        else:
+            uz_matn = claude_generate(
+                "AzanMarket mahsulot uchun qisqa, jozibali Instagram post matni yoz (O'zbek tilida, 2-3 gap):",
+                AZANMARKET_INFO
+            )
+
+        ru_matn = translate_to_russian(uz_matn)
+        en_matn = claude_generate(
+            f"Translate to English (short, catchy Instagram style):\n{uz_matn}",
+            "You are a professional translator. Give only the translation."
+        )
+
+        await update.message.reply_text("🖼️ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
+
+        # 3 tilda rasm yarat
+        rasms = create_image_with_text(None, uz_matn, ru_matn, en_matn)
+
+        langs = ["🇺🇿 O'zbekcha", "🇷🇺 Ruscha", "🇬🇧 English"]
+        matns = [uz_matn, ru_matn, en_matn]
+
+        for i, rasm in enumerate(rasms):
+            await ctx.bot.send_photo(
+                chat_id=update.message.chat_id,
+                photo=rasm["url"],
+                caption=f"{langs[i]}\n\n{matns[i]}"
+            )
+
+        set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+        await update.message.reply_text(
+            "✅ 3 ta rasm tayyor! Yana kontent yaratamizmi?",
+            reply_markup=main_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"AzanMarket error: {e}")
+        await update.message.reply_text(f"❌ Xatolik: {str(e)}")
+
+# ==================== AVTOMATIK YUBORISH ====================
+async def daily_send(ctx: ContextTypes.DEFAULT_TYPE):
+    try:
+        tz = pytz.timezone(TIMEZONE)
+        today = datetime.now(tz)
+        day_index = (today.timetuple().tm_yday - 1) % 30
+        calendar_item = CALENDAR[day_index]
+        mavzu = calendar_item["mavzu"]
+
+        mavzu_map = {
+            "Kun hikmati": "kun_hikmati",
+            "Kun taomi": "kun_taomi",
+            "Hajviya": "hajviya",
+            "Sog'liq fakti": "sogliq_fakti",
+            "Mahsulot reklama": "mahsulot_reklama",
+        }
+        mavzu_key = mavzu_map.get(mavzu, "kun_hikmati")
+
+        await ctx.bot.send_message(
+            chat_id=CHAT_ID,
+            text=f"⏰ *Bugungi kontent — Kun {day_index+1}*\nMavzu: *{mavzu}*\n\nYaratilmoqda...",
+            parse_mode="Markdown"
+        )
+
+        story_text = generate_story("shohona", mavzu_key)
+
+        uz_text = ru_text = ""
+        if "🇺🇿" in story_text and "🇷🇺" in story_text:
+            parts = story_text.split("🇷🇺")
+            uz_text = parts[0].replace("🇺🇿", "").replace("O'ZBEKCHA:", "").strip()
+            ru_text = parts[1].replace("RUSCHA:", "").strip() if len(parts) > 1 else ""
+
+        style_map = {
+            "kun_hikmati": "hikmat",
+            "sogliq_fakti": "sogliq",
+            "hajviya": "hajviya",
+            "kun_taomi": "taom",
+            "mahsulot_reklama": "taom",
+        }
+        style = style_map.get(mavzu_key, "hikmat")
+
+        if mavzu_key != "mahsulot_reklama":
+            image_url = create_story_image(
+                uz_text or story_text[:200],
+                ru_text or translate_to_russian(story_text[:200]),
+                style
+            )
+            await ctx.bot.send_photo(
+                chat_id=CHAT_ID,
+                photo=image_url,
+                caption=f"📅 *Kun {day_index+1} | {mavzu}*\n\n{story_text}"[:1024],
+                parse_mode="Markdown"
+            )
+        else:
+            await ctx.bot.send_message(
+                chat_id=CHAT_ID,
+                text=f"📅 *Kun {day_index+1} | {mavzu}*\n\n{story_text}",
+                parse_mode="Markdown"
+            )
+
+    except Exception as e:
+        logger.error(f"Daily send error: {e}")
+        await ctx.bot.send_message(chat_id=CHAT_ID, text=f"❌ Avtomatik yuborishda xatolik: {e}")
+
+# ==================== BUYRUQLAR ====================
+async def cmd_bugun(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz)
+    day_index = (today.timetuple().tm_yday - 1) % 30
+    item = CALENDAR[day_index]
+    await update.message.reply_text(
+        f"📅 *Bugun — Kun {day_index+1}*\nMavzu: *{item['mavzu']}*\nTavsif: {item['tavsif']}",
+        parse_mode="Markdown"
+    )
+
+async def cmd_vaqt(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    global TIMEZONE
+    args = ctx.args
+    if args and args[0].lower() == "kst":
+        TIMEZONE = "Asia/Seoul"
+        await update.message.reply_text("✅ Vaqt zonasi: Koreya (KST) ga o'zgartirildi!")
+    elif args and args[0].lower() == "uzt":
+        TIMEZONE = "Asia/Tashkent"
+        await update.message.reply_text("✅ Vaqt zonasi: O'zbekiston (UZT) ga o'zgartirildi!")
+    else:
+        await update.message.reply_text(f"⏰ Hozirgi vaqt zonasi: *{TIMEZONE}*\n\nO'zgartirish: /vaqt kst yoki /vaqt uzt", parse_mode="Markdown")
+
+async def cmd_story(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
+    await update.message.reply_text(
+        "🤖 *Qaysi brend uchun?*",
+        reply_markup=main_keyboard(),
+        parse_mode="Markdown"
+    )
+
+async def cmd_kalendar(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz)
+    current_day = (today.timetuple().tm_yday - 1) % 30
+
+    text = "📅 *30 Kunlik Shohona Kalendar:*\n\n"
+    for i, item in enumerate(CALENDAR):
+        marker = "▶️" if i == current_day else f"{i+1}."
+        text += f"{marker} {item['mavzu']}\n"
+
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+# ==================== MAIN ====================
+def main():
+    app = Application.builder().token(BOT_TOKEN).build()
+
+    # Handlers
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("story", cmd_story))
+    app.add_handler(CommandHandler("bugun", cmd_bugun))
+    app.add_handler(CommandHandler("vaqt", cmd_vaqt))
+    app.add_handler(CommandHandler("kalendar", cmd_kalendar))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT & ~filters.COMMAND, message_handler))
+
+    # Avtomatik yuborish — har kuni 09:00
+    app.job_queue.run_daily(
+        daily_send,
+        time=time(hour=SEND_HOUR, minute=0, tzinfo=pytz.timezone(TIMEZONE))
+    )
+
+    logger.info("Bot ishga tushdi!")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
