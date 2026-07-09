@@ -190,7 +190,7 @@ Brand name subtle at bottom.
 No logos. High quality. Instagram-ready."""
 
         response = openai_client.images.generate(
-            model="dall-e-3",
+            model="gpt-image-2",
             prompt=prompt,
             size="1024x1024",
             quality="standard",
@@ -222,7 +222,7 @@ Divider line between them.
 Square 1:1 format. Instagram-ready. No logos. Professional."""
 
     response = openai_client.images.generate(
-        model="dall-e-3",
+        model="gpt-image-2",
         prompt=prompt,
         size="1024x1024",
         quality="standard",
