@@ -196,8 +196,10 @@ No logos. High quality. Instagram-ready."""
             quality="medium",
             n=1
         )
+        # URL dan rasm yuklab olish
+        img_response = requests.get(response.data[0].url)
         results.append({
-            "url": response.data[0].url,
+            "bytes": BytesIO(img_response.content),
             "lang": lang_name
         })
 
@@ -228,7 +230,9 @@ Square 1:1 format. Instagram-ready. No logos. Professional."""
         quality="medium",
         n=1
     )
-    return response.data[0].url
+    # URL dan rasm yuklab olish
+    img_response = requests.get(response.data[0].url)
+    return BytesIO(img_response.content)
 
 # ==================== KEYBOARD ====================
 def main_keyboard():
@@ -451,6 +455,7 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
                 caption=caption[:1024],
                 parse_mode="Markdown"
             )
+            image_url.seek(0)
 
         # State reset
         set_state(uid, brend=None, mavzu=None, rasm=None, step="start")
@@ -501,9 +506,10 @@ async def process_azanmarket(uid, update, ctx, matn=None):
         matns = [uz_matn, ru_matn, en_matn]
 
         for i, rasm in enumerate(rasms):
+            rasm["bytes"].seek(0)
             await ctx.bot.send_photo(
                 chat_id=update.message.chat_id,
-                photo=rasm["url"],
+                photo=rasm["bytes"],
                 caption=f"{langs[i]}\n\n{matns[i]}"
             )
 
@@ -559,14 +565,15 @@ async def daily_send(ctx: ContextTypes.DEFAULT_TYPE):
         style = style_map.get(mavzu_key, "hikmat")
 
         if mavzu_key != "mahsulot_reklama":
-            image_url = create_story_image(
+            image_bytes = create_story_image(
                 uz_text or story_text[:200],
                 ru_text or translate_to_russian(story_text[:200]),
                 style
             )
+            image_bytes.seek(0)
             await ctx.bot.send_photo(
                 chat_id=CHAT_ID,
-                photo=image_url,
+                photo=image_bytes,
                 caption=f"📅 *Kun {day_index+1} | {mavzu}*\n\n{story_text}"[:1024],
                 parse_mode="Markdown"
             )
