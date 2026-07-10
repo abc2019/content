@@ -197,6 +197,88 @@ Format (AYNAN SHU FORMATDA YOZ):
     return resp.content[0].text
 
 # ==================== DALL-E RASM ====================
+def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
+    """Bir nechta rasmni bir xil background bilan birlashtirib collage yasaydi"""
+    from PIL import Image, ImageOps
+    import io
+
+    SIZE = 1024
+    CELL_PAD = 12  # Rasmlar orasidagi bo'shliq
+    BG = Image.new("RGB", (SIZE, SIZE), bg_color)
+
+    imgs = []
+    for b64 in rasmlar_b64[:4]:
+        data = base64.b64decode(b64)
+        img = Image.open(io.BytesIO(data)).convert("RGBA")
+
+        # Oq background ga joylashtirish
+        bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+        try:
+            bg.paste(img, mask=img.split()[3])
+        except Exception:
+            bg.paste(img)
+        img = bg.convert("RGB")
+        imgs.append(img)
+
+    n = len(imgs)
+
+    def fit_image(img, w, h):
+        """Rasmni belgilangan o'lchamga moslashtirish (crop)"""
+        img_ratio = img.width / img.height
+        target_ratio = w / h
+        if img_ratio > target_ratio:
+            new_h = h
+            new_w = int(h * img_ratio)
+        else:
+            new_w = w
+            new_h = int(w / img_ratio)
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+        left = (img.width - w) // 2
+        top = (img.height - h) // 2
+        return img.crop((left, top, left + w, top + h))
+
+    if n == 1:
+        cell = fit_image(imgs[0], SIZE - CELL_PAD * 2, SIZE - CELL_PAD * 2)
+        BG.paste(cell, (CELL_PAD, CELL_PAD))
+
+    elif n == 2:
+        w = (SIZE - CELL_PAD * 3) // 2
+        h = SIZE - CELL_PAD * 2
+        for i, img in enumerate(imgs):
+            cell = fit_image(img, w, h)
+            x = CELL_PAD + i * (w + CELL_PAD)
+            BG.paste(cell, (x, CELL_PAD))
+
+    elif n == 3:
+        # Yuqorida 1 ta katta, pastda 2 ta
+        top_h = (SIZE - CELL_PAD * 3) // 2
+        bot_h = SIZE - CELL_PAD * 3 - top_h
+        top_w = SIZE - CELL_PAD * 2
+        bot_w = (SIZE - CELL_PAD * 3) // 2
+
+        cell0 = fit_image(imgs[0], top_w, top_h)
+        BG.paste(cell0, (CELL_PAD, CELL_PAD))
+
+        for i, img in enumerate(imgs[1:]):
+            cell = fit_image(img, bot_w, bot_h)
+            x = CELL_PAD + i * (bot_w + CELL_PAD)
+            y = CELL_PAD * 2 + top_h
+            BG.paste(cell, (x, y))
+
+    elif n >= 4:
+        w = (SIZE - CELL_PAD * 3) // 2
+        h = (SIZE - CELL_PAD * 3) // 2
+        for i, img in enumerate(imgs[:4]):
+            cell = fit_image(img, w, h)
+            x = CELL_PAD + (i % 2) * (w + CELL_PAD)
+            y = CELL_PAD + (i // 2) * (h + CELL_PAD)
+            BG.paste(cell, (x, y))
+
+    buf = io.BytesIO()
+    BG.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+    return base64.b64encode(buf.read()).decode()
+
 def create_image_with_text(rasm_b64, matn_uz, matn_ru, matn_en=None):
     """Berilgan rasmdan foydalanib 1:1 formatda 3 tilda rasm yaratadi"""
     results = []
@@ -799,8 +881,15 @@ async def process_azanmarket(uid, update, ctx, matn=None):
             await update.message.reply_text("❌ Rasm topilmadi. Qaytadan yuboring.")
             return
 
-        # Asosiy rasm — birinchi rasm
-        asosiy_rasm = rasmlar[0] if rasmlar else rasm_b64
+        # Asosiy rasm — 1 ta bo'lsa o'zi, ko'p bo'lsa collage
+        if len(rasmlar) > 1:
+            await update.message.reply_text(
+                f"🖼️ *{len(rasmlar)} ta rasm birlashtirilyapti...*",
+                parse_mode="Markdown"
+            )
+            asosiy_rasm = create_collage(rasmlar)
+        else:
+            asosiy_rasm = rasmlar[0] if rasmlar else rasm_b64
 
         # Matn yaratish
         if matn:
