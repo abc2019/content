@@ -482,16 +482,20 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         caption = update.message.caption or ""
 
         if brend == "azanmarket":
-            set_state(uid, rasm=img_b64, step="matn_wait_az")
+            # Ko'p rasm bo'lsa — listga qo'shib borish
+            existing = get_state(uid).get("rasmlar", [])
+            existing.append(img_b64)
+            set_state(uid, rasmlar=existing, rasm=img_b64, step="matn_wait_az")
+
             if caption:
-                # Caption bilan birga kelgan — hoziroq process qil
                 await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
                 await process_azanmarket(uid, update, ctx, matn=caption)
             else:
                 await update.message.reply_text(
-                    "📝 Matn yozasizmi? (yoki /skip yozing)",
+                    f"📸 *{len(existing)} ta rasm qabul qilindi!*\n\nYana rasm yuborasizmi yoki matn yozasizmi?\n\nMatn yozmasangiz /skip yozing",
                     parse_mode="Markdown"
                 )
+
         elif brend == "shohona":
             set_state(uid, rasm=img_b64)
             if caption:
@@ -507,6 +511,13 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         [InlineKeyboardButton("🤖 Bot o'zi yaratsin", callback_data="matn_yoq")],
                     ])
                 )
+        else:
+            # Brend tanlanmagan — AzanMarket deb qabul qil
+            set_state(uid, brend="azanmarket", rasmlar=[img_b64], rasm=img_b64, step="matn_wait_az")
+            await update.message.reply_text(
+                "📸 *Rasm qabul qilindi!*\n\nYana rasm yuborasizmi yoki matn yozasizmi?\n\nMatn yozmasangiz /skip yozing",
+                parse_mode="Markdown"
+            )
         return
 
     # Matn yuborildi
@@ -781,37 +792,44 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
 async def process_azanmarket(uid, update, ctx, matn=None):
     state = get_state(uid)
     rasm_b64 = state.get("rasm")
+    rasmlar = state.get("rasmlar", [])
 
     try:
-        if not rasm_b64:
+        if not rasm_b64 and not rasmlar:
             await update.message.reply_text("❌ Rasm topilmadi. Qaytadan yuboring.")
             return
 
-        # 3 tilda matn yarat
+        # Asosiy rasm — birinchi rasm
+        asosiy_rasm = rasmlar[0] if rasmlar else rasm_b64
+
+        # Matn yaratish
         if matn:
             uz_matn = matn
         else:
             # Rasmdagi matnni o'qi
+            content = [
+                {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": asosiy_rasm}},
+                {"type": "text", "text": "Bu mahsulot haqida qisqa, jozibali Instagram post matni yoz (O'zbek tilida, 2-3 gap, emoji bilan):"}
+            ]
+            if len(rasmlar) > 1:
+                content[1]["text"] = f"Bu {len(rasmlar)} ta mahsulot rasmi uchun qisqa, jozibali Instagram post matni yoz (O'zbek tilida, 2-3 gap, emoji bilan):"
+            
             resp = claude.messages.create(
                 model="claude-sonnet-4-5",
-                max_tokens=500,
-                messages=[{"role": "user", "content": [
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": rasm_b64}},
-                    {"type": "text", "text": "Bu rasmdagi mahsulot nomi va asosiy ma'lumotni qisqacha yoz (O'zbek tilida, 1-2 gap):"}
-                ]}]
+                max_tokens=300,
+                messages=[{"role": "user", "content": content}]
             )
             uz_matn = resp.content[0].text
 
         ru_matn = translate_to_russian(uz_matn)
         en_matn = claude_generate(
-            f"Translate to English (short, catchy Instagram style):\n{uz_matn}",
+            f"Translate to English (short, catchy Instagram style, 2-3 sentences):\n{uz_matn}",
             "You are a professional translator. Give only the translation."
         )
 
         await update.message.reply_text("🖼️ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
 
-        # 3 tilda rasm yarat — rasmni background sifatida ishlatib
-        rasms = create_image_with_text(rasm_b64, uz_matn, ru_matn, en_matn)
+        rasms = create_image_with_text(asosiy_rasm, uz_matn, ru_matn, en_matn)
 
         langs = ["🇺🇿 O'zbekcha", "🇷🇺 Ruscha", "🇬🇧 English"]
         matns = [uz_matn, ru_matn, en_matn]
@@ -824,7 +842,10 @@ async def process_azanmarket(uid, update, ctx, matn=None):
                 caption=f"{langs[i]}\n\n{matns[i]}"
             )
 
-        set_state(uid, last_story=f"{uz_matn}\n\n{ru_matn}\n\n{en_matn}")
+        # State yangilash
+        set_state(uid, last_story=f"🇺🇿 {uz_matn}\n\n🇷🇺 {ru_matn}\n\n🇬🇧 {en_matn}",
+                  rasmlar=[], rasm=None)
+
         await update.message.reply_text(
             "Nima qilasiz?",
             reply_markup=after_keyboard()
