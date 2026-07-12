@@ -196,15 +196,33 @@ Format (AYNAN SHU FORMATDA YOZ):
     )
     return resp.content[0].text
 
+# ==================== YORDAMCHI: RASM O'LCHASH ====================
+def fit_image(img, w, h):
+    """Rasmni belgilangan o'lchamga moslashtirish (crop, sifat yo'qotmasdan)"""
+    from PIL import Image
+    img_ratio = img.width / img.height
+    target_ratio = w / h
+    if img_ratio > target_ratio:
+        new_h = h
+        new_w = int(h * img_ratio)
+    else:
+        new_w = w
+        new_h = int(w / img_ratio)
+    img = img.resize((new_w, new_h), Image.LANCZOS)
+    left = (img.width - w) // 2
+    top = (img.height - h) // 2
+    return img.crop((left, top, left + w, top + h))
+
 # ==================== DALL-E RASM ====================
-def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
-    """Bir nechta rasmni bir xil background bilan birlashtirib collage yasaydi"""
+def create_collage(rasmlar_b64, bg_color=(245, 245, 245), width=1024, height=1024):
+    """Bir nechta rasmni bir xil background bilan birlashtirib collage yasaydi.
+    width/height orqali istalgan format (1:1, 9:16 va h.k.) uchun ishlaydi."""
     from PIL import Image, ImageOps
     import io
 
-    SIZE = 1024
+    W, H = width, height
     CELL_PAD = 12  # Rasmlar orasidagi bo'shliq
-    BG = Image.new("RGB", (SIZE, SIZE), bg_color)
+    BG = Image.new("RGB", (W, H), bg_color)
 
     imgs = []
     for b64 in rasmlar_b64[:4]:
@@ -222,28 +240,13 @@ def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
 
     n = len(imgs)
 
-    def fit_image(img, w, h):
-        """Rasmni belgilangan o'lchamga moslashtirish (crop)"""
-        img_ratio = img.width / img.height
-        target_ratio = w / h
-        if img_ratio > target_ratio:
-            new_h = h
-            new_w = int(h * img_ratio)
-        else:
-            new_w = w
-            new_h = int(w / img_ratio)
-        img = img.resize((new_w, new_h), Image.LANCZOS)
-        left = (img.width - w) // 2
-        top = (img.height - h) // 2
-        return img.crop((left, top, left + w, top + h))
-
     if n == 1:
-        cell = fit_image(imgs[0], SIZE - CELL_PAD * 2, SIZE - CELL_PAD * 2)
+        cell = fit_image(imgs[0], W - CELL_PAD * 2, H - CELL_PAD * 2)
         BG.paste(cell, (CELL_PAD, CELL_PAD))
 
     elif n == 2:
-        w = (SIZE - CELL_PAD * 3) // 2
-        h = SIZE - CELL_PAD * 2
+        w = (W - CELL_PAD * 3) // 2
+        h = H - CELL_PAD * 2
         for i, img in enumerate(imgs):
             cell = fit_image(img, w, h)
             x = CELL_PAD + i * (w + CELL_PAD)
@@ -251,10 +254,10 @@ def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
 
     elif n == 3:
         # Yuqorida 1 ta katta, pastda 2 ta
-        top_h = (SIZE - CELL_PAD * 3) // 2
-        bot_h = SIZE - CELL_PAD * 3 - top_h
-        top_w = SIZE - CELL_PAD * 2
-        bot_w = (SIZE - CELL_PAD * 3) // 2
+        top_h = (H - CELL_PAD * 3) // 2
+        bot_h = H - CELL_PAD * 3 - top_h
+        top_w = W - CELL_PAD * 2
+        bot_w = (W - CELL_PAD * 3) // 2
 
         cell0 = fit_image(imgs[0], top_w, top_h)
         BG.paste(cell0, (CELL_PAD, CELL_PAD))
@@ -266,8 +269,8 @@ def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
             BG.paste(cell, (x, y))
 
     elif n >= 4:
-        w = (SIZE - CELL_PAD * 3) // 2
-        h = (SIZE - CELL_PAD * 3) // 2
+        w = (W - CELL_PAD * 3) // 2
+        h = (H - CELL_PAD * 3) // 2
         for i, img in enumerate(imgs[:4]):
             cell = fit_image(img, w, h)
             x = CELL_PAD + (i % 2) * (w + CELL_PAD)
@@ -279,9 +282,100 @@ def create_collage(rasmlar_b64, bg_color=(245, 245, 245)):
     buf.seek(0)
     return base64.b64encode(buf.read()).decode()
 
-def create_image_with_text(rasm_b64, matn_uz, matn_ru, matn_en=None):
-    """Berilgan rasmdan foydalanib 1:1 formatda 3 tilda rasm yaratadi"""
+# ==================== MATNNI RASMGA CHIZISH (PIL, ishonchli) ====================
+_FONT_CANDIDATES = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "DejaVuSans-Bold.ttf"),
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+    "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+    "C:\\Windows\\Fonts\\arialbd.ttf",
+]
+
+def _get_font(size):
+    from PIL import ImageFont
+    for path in _FONT_CANDIDATES:
+        if os.path.exists(path):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+    logger.warning("Bold shrift topilmadi, standart shrift ishlatilyapti (sifat pastroq bo'lishi mumkin)")
+    return ImageFont.load_default()
+
+def _wrap_text(draw, text, font, max_width):
+    words = text.split()
+    lines = []
+    current = ""
+    for word in words:
+        test = (current + " " + word).strip()
+        bbox = draw.textbbox((0, 0), test, font=font)
+        if bbox[2] - bbox[0] <= max_width or not current:
+            current = test
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+def draw_text_on_image(rasm_b64, matn, width=1024, height=1024):
+    """Berilgan (yoki collage qilingan) rasm ustiga matnni ishonchli tarzda chizadi.
+    AI'ga bog'liq emas — shuning uchun rasm buzilmaydi va matn har doim aniq chiqadi."""
+    from PIL import Image, ImageDraw
+    import io
+
+    img_data = base64.b64decode(rasm_b64)
+    img = Image.open(io.BytesIO(img_data)).convert("RGB")
+    img = fit_image(img, width, height)  # kerakli formatga moslash (sifat yo'qotmasdan)
+
+    # Matn uchun shrift o'lchamini tanlash (uzun matnlarda avtomatik kichraytiriladi)
+    max_text_width = width - 120
+    font_size = 58
+    font = _get_font(font_size)
+    draw = ImageDraw.Draw(img)
+    lines = _wrap_text(draw, matn, font, max_text_width)
+    while len(lines) > 6 and font_size > 26:
+        font_size -= 4
+        font = _get_font(font_size)
+        lines = _wrap_text(draw, matn, font, max_text_width)
+
+    line_height = int(font_size * 1.35)
+    block_height = line_height * len(lines) + 70
+    block_height = min(block_height, height - 40)
+
+    # Pastki qismga yarim shaffof qora fon (matn o'qilishi uchun)
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    odraw = ImageDraw.Draw(overlay)
+    odraw.rectangle([0, height - block_height, width, height], fill=(0, 0, 0, 165))
+    img = Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB")
+    draw = ImageDraw.Draw(img)
+
+    y = height - block_height + 35
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font)
+        w = bbox[2] - bbox[0]
+        x = max((width - w) // 2, 20)
+        # Yengil qora "stroke" — istalgan fon rangida ham o'qilishi uchun
+        draw.text((x, y), line, font=font, fill=(255, 255, 255),
+                   stroke_width=2, stroke_fill=(0, 0, 0))
+        y += line_height
+
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=95)
+    buf.seek(0)
+    return buf
+
+def create_image_with_text(rasm_b64, matn_uz, matn_ru, matn_en=None, format_="1:1"):
+    """Berilgan rasmdan foydalanib tanlangan formatda (1:1 yoki 9:16) 3 tilda rasm yaratadi"""
     results = []
+
+    # Format bo'yicha o'lcham
+    if format_ == "9:16":
+        width, height = 1024, 1820
+        ai_size = "1024x1536"  # OpenAI qo'llab-quvvatlaydigan eng yaqin portret o'lcham
+    else:
+        width, height = 1024, 1024
+        ai_size = "1024x1024"
 
     langs = [
         ("O'zbekcha", matn_uz),
@@ -291,40 +385,24 @@ def create_image_with_text(rasm_b64, matn_uz, matn_ru, matn_en=None):
         langs.append(("English", matn_en))
 
     for lang_name, matn in langs:
-        # Agar rasm berilgan bo'lsa — edit API ishlatamiz
+        # Agar rasm berilgan bo'lsa — matnni PIL bilan TO'G'RIDAN-TO'G'RI
+        # rasm ustiga chizamiz (AI orqali emas). Bu original rasmni
+        # (yoki collage'ni) BUZMAYDI va matn har doim aniq chiqadi.
         if rasm_b64:
-            from openai import OpenAI
-            import io
-
-            img_data = base64.b64decode(rasm_b64)
-            img_file = io.BytesIO(img_data)
-            img_file.name = "image.jpg"
-
-            response = openai_client.images.edit(
-                model="gpt-image-2",
-                image=img_file,
-                prompt=f"""Professional Instagram post (1:1 square format).
-Keep the product photo as background.
-Add text overlay: "{matn}" — large, bold, beautiful font, white or contrasting color.
-Add semi-transparent dark overlay at bottom for text readability.
-Clean, modern design. No logos. Instagram-ready.""",
-                size="1024x1024",
-                quality="medium",
-                n=1
-            )
+            img_bytes = draw_text_on_image(rasm_b64, matn, width=width, height=height)
         else:
             response = openai_client.images.generate(
                 model="gpt-image-2",
-                prompt=f"""Professional Instagram post (1:1 square format).
+                prompt=f"""Professional Instagram post ({format_} format).
 Modern clean food brand design. Elegant background.
 Text: "{matn}" — large, bold, beautiful font.
 Instagram-ready. No logos.""",
-                size="1024x1024",
+                size=ai_size,
                 quality="medium",
                 n=1
             )
+            img_bytes = BytesIO(base64.b64decode(response.data[0].b64_json))
 
-        img_bytes = BytesIO(base64.b64decode(response.data[0].b64_json))
         results.append({
             "bytes": img_bytes,
             "lang": lang_name
@@ -385,6 +463,13 @@ def after_keyboard():
         [InlineKeyboardButton("🎨 Stil tuzat", callback_data="tuzatish_stil")],
         [InlineKeyboardButton("🔄 Boshqacha qil", callback_data="qayta_yaratish")],
         [InlineKeyboardButton("✅ Qabul", callback_data="start")],
+    ])
+
+def azanmarket_format_keyboard():
+    """AzanMarket uchun format tanlash tugmalari"""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬛ 1:1 (Post)", callback_data="azm_format_1_1")],
+        [InlineKeyboardButton("📱 9:16 (Story)", callback_data="azm_format_9_16")],
     ])
 
 def input_keyboard(mavzu):
@@ -549,6 +634,13 @@ async def button_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("⏳ *Yaratilmoqda...*", parse_mode="Markdown")
         await process_shohona(uid, query, ctx)
 
+    elif data in ("azm_format_1_1", "azm_format_9_16"):
+        fmt = "1:1" if data == "azm_format_1_1" else "9:16"
+        pending_matn = get_state(uid).get("pending_matn")
+        set_state(uid, step="processing")
+        await query.edit_message_text("⏳ *Rasmlar yaratilmoqda...*", parse_mode="Markdown")
+        await process_azanmarket(uid, query, ctx, matn=pending_matn, format_=fmt)
+
 async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     state = get_state(uid)
@@ -570,8 +662,12 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             set_state(uid, rasmlar=existing, rasm=img_b64, step="matn_wait_az")
 
             if caption:
-                await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
-                await process_azanmarket(uid, update, ctx, matn=caption)
+                set_state(uid, pending_matn=caption, step="format_wait_az")
+                await update.message.reply_text(
+                    "🖼️ *Format tanlang:*",
+                    reply_markup=azanmarket_format_keyboard(),
+                    parse_mode="Markdown"
+                )
             else:
                 await update.message.reply_text(
                     f"📸 *{len(existing)} ta rasm qabul qilindi!*\n\nYana rasm yuborasizmi yoki matn yozasizmi?\n\nMatn yozmasangiz /skip yozing",
@@ -606,13 +702,21 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
 
     if text == "/skip" and brend == "azanmarket":
-        await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
-        await process_azanmarket(uid, update, ctx, matn=None)
+        set_state(uid, pending_matn=None, step="format_wait_az")
+        await update.message.reply_text(
+            "🖼️ *Format tanlang:*",
+            reply_markup=azanmarket_format_keyboard(),
+            parse_mode="Markdown"
+        )
         return
 
     if step == "matn_wait_az":
-        await update.message.reply_text("⏳ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
-        await process_azanmarket(uid, update, ctx, matn=text)
+        set_state(uid, pending_matn=text, step="format_wait_az")
+        await update.message.reply_text(
+            "🖼️ *Format tanlang:*",
+            reply_markup=azanmarket_format_keyboard(),
+            parse_mode="Markdown"
+        )
 
     elif step == "tuzatish_wait":
         # Tuzatish ko'rsatmasi keldi
@@ -871,10 +975,16 @@ async def process_shohona(uid, update_or_query, ctx, matn=None):
         if hasattr(update_or_query, 'message') and update_or_query.message:
             await update_or_query.message.reply_text(err_msg)
 
-async def process_azanmarket(uid, update, ctx, matn=None):
+async def process_azanmarket(uid, update, ctx, matn=None, format_="1:1"):
     state = get_state(uid)
     rasm_b64 = state.get("rasm")
     rasmlar = state.get("rasmlar", [])
+
+    # Format bo'yicha collage o'lchami
+    if format_ == "9:16":
+        collage_w, collage_h = 1024, 1820
+    else:
+        collage_w, collage_h = 1024, 1024
 
     try:
         if not rasm_b64 and not rasmlar:
@@ -887,7 +997,7 @@ async def process_azanmarket(uid, update, ctx, matn=None):
                 f"🖼️ *{len(rasmlar)} ta rasm birlashtirilyapti...*",
                 parse_mode="Markdown"
             )
-            asosiy_rasm = create_collage(rasmlar)
+            asosiy_rasm = create_collage(rasmlar, width=collage_w, height=collage_h)
         else:
             asosiy_rasm = rasmlar[0] if rasmlar else rasm_b64
 
@@ -918,7 +1028,7 @@ async def process_azanmarket(uid, update, ctx, matn=None):
 
         await update.message.reply_text("🖼️ *3 ta rasm yaratilmoqda...*", parse_mode="Markdown")
 
-        rasms = create_image_with_text(asosiy_rasm, uz_matn, ru_matn, en_matn)
+        rasms = create_image_with_text(asosiy_rasm, uz_matn, ru_matn, en_matn, format_=format_)
 
         langs = ["🇺🇿 O'zbekcha", "🇷🇺 Ruscha", "🇬🇧 English"]
         matns = [uz_matn, ru_matn, en_matn]
